@@ -35,12 +35,18 @@
 *.xcodeproj
 *.xcworkspace
 *.sln
+*.slnx
 *.suo
 *.opensdf
 *.sdf
 *.VC.db
 *.VC.opendb
 .vsconfig
+
+# IDE/editor workspace files
+.vscode/
+.idea/
+*.code-workspace
 
 # Precompiled Assets
 SourceArt/**/*.png
