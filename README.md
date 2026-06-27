@@ -18,6 +18,7 @@
 - 将草实例组件从普通 `InstancedStaticMeshComponent` 调整为 `HierarchicalInstancedStaticMeshComponent`，大量草实例下帧率稳定性明显提升。
 - 使用 UE Static Mesh 自带 LOD 管理近景、中景和远景草表现，不再使用 `Grid Size` / HiGen 分层方案。
 - 为草地 LOD 准备了 Near、Mid、Far、Far_Far 多套材质实例，用于区分不同距离下的风场、颜色和材质复杂度。
+- 新增基于 Render Target 的草地交互原型，玩家经过草地时会在局部区域生成下压遮罩，草叶会随遮罩向下压低并逐渐恢复。
 
 ## 关键实现
 
@@ -71,6 +72,43 @@ Content/ProceduarlGrass/Materials/M_Grass_Inst_Far_Far
 
 材质还包含风场参数和 `PerInstanceCustomData` 读取，用于让 PCG 生成的实例带有颜色和形态上的轻微差异。
 
+### 草地交互
+
+当前草地交互使用两张 Render Target 记录局部下压状态，而不是只依赖单个玩家位置参数。相关资源位于：
+
+```text
+Content/ProceduarlGrass/BluePrint/BP_GrassInteractionManager
+Content/ProceduarlGrass/Materials/MPC_GrassInteraction
+Content/ProceduarlGrass/Materials/RT_GrassState
+Content/ProceduarlGrass/Materials/RT_GrassPrev
+Content/ProceduarlGrass/Materials/M_RT_Brush
+Content/ProceduarlGrass/Materials/M_RT_Decay
+Content/ProceduarlGrass/Materials/M_RT_Copy
+```
+
+`BP_GrassInteractionManager` 放在关卡中作为交互管理器，每帧执行以下流程：
+
+```text
+RT_GrassPrev
+-> M_RT_Decay
+-> RT_GrassState
+-> Canvas Draw M_RT_Brush
+-> RT_GrassState
+-> M_RT_Copy
+-> RT_GrassPrev
+```
+
+其中：
+
+- `M_RT_Decay` 用上一帧的 RT 乘以衰减值，让旧的压痕逐渐恢复。
+- `M_RT_Brush` 根据玩家世界位置在 `RT_GrassState` 上绘制柔边圆形区域。
+- `M_RT_Copy` 将当前帧结果写回 `RT_GrassPrev`，供下一帧继续衰减。
+- `MPC_GrassInteraction` 向草材质同步 `RT_Center` 和 `RT_WorldSize`，用于把世界坐标转换到 RT UV。
+
+草材质 `M_Grass` 会采样 `RT_GrassState` 的 R 通道，并将其转换为 `InteractionDown`。这个值目前只接入贝塞尔草叶形变中的 P1/P2 的 Y 分量，用于实现草叶下压。
+
+当前阶段交互只实现“下压”，还没有方向性。也就是说，草会根据遮罩被压低，但不会根据玩家移动方向或物体推挤方向向外倒伏。后续可以把推挤方向写入 RT 的 RG 通道，再在草材质里用方向信息控制横向弯曲。
+
 ### 实例与 LOD 优化
 
 草实例目前通过 `Static Mesh Spawner` 生成，并使用：
@@ -123,6 +161,8 @@ Cleanup -> Generate
 - `PCG_Grass_Inst` 中的密度、Voronoi 分辨率、剔除范围等参数。
 - `M_Grass_Inst_Near`、`M_Grass_Inst_Mid`、`M_Grass_Inst_Far` 等材质实例中的草色、风场、WPO 和随机变化参数。
 - 草 Static Mesh 中的 LOD 切换距离、材质槽和 Cull Distance。
+- `BP_GrassInteractionManager` 中的 `RT_WorldSize`、`BrushPixelSize`、RT 衰减值和交互 Brush 覆盖范围。
+- `M_Grass` 中的交互下压强度，控制 RT 遮罩对草叶 P1/P2 的影响幅度。
 - Spline 或带标签 Actor 的位置、尺寸和标签。
 
 ## 已知注意点
@@ -132,3 +172,4 @@ Cleanup -> Generate
 - Masked 草材质、WPO 风场和大量实例容易带来闪烁、过度绘制和阴影噪声，后续还需要继续调材质和渲染参数。
 - 如果 Actor 剔除没有生效，优先检查标签是否写在 `Actor Tags`，以及 PCG 是否重新 `Cleanup -> Generate`。
 - 之前尝试过 `Grid Size` / Runtime HiGen 近中景分层，但会显著增加 PCG 生成任务数量，当前版本改用 HISM + Static Mesh LOD 作为主要优化路径。
+- 草地交互当前只记录下压强度，不记录方向；方向性弯折仍是后续工作。
